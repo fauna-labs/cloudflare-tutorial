@@ -1,0 +1,30 @@
+collection Product {
+  name: String
+  description: String
+  // Use an Integer to represent cents.
+  // This avoids floating-point precision issues.
+  price: Int
+  category: Ref<Category>
+  stock: Int
+
+  // Use a unique constraint to ensure no two products have the same name.
+  unique [.name]
+  check stockIsValid (product => product.stock >= 0)
+  check priceIsValid (product => product.price > 0)
+
+  index byCategory {
+    terms [.category]
+  }
+
+  index sortedByCategory {
+    values [.category]
+  }
+
+  index byName {
+    terms [.name]
+  }
+
+  index sortedByPriceLowToHigh {
+    values [.price, .name, .description, .stock]
+  }
+}

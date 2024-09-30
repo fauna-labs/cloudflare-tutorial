@@ -1,0 +1,11 @@
+collection Category {
+  name: String
+  description: String?
+  compute products: Set<Product> = (category => Product.byCategory(category))
+
+  unique [.name]
+
+  index byName {
+    terms [.name]
+  }
+}

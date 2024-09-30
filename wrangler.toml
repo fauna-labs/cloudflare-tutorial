@@ -1,0 +1,6 @@
+name = "newapp"
+main = "src/index.ts"
+compatibility_date = "2024-09-30"
+
+[vars]
+FAUNA_SECRET = "<your-fauna-database-secret>"
