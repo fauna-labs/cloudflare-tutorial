@@ -11,7 +11,17 @@ export default {
     ctx: ExecutionContext
   ): Promise<Response> {
     // Extract the method from the request
-    const { method } = request;
+    const { method, url } = request;
+		const { pathname } = new URL(url);
+
+		// Route the request based on path and method
+    if (method === "POST" && pathname.startsWith("/dynamic/")) {
+      const collectionName = pathname.split("/dynamic/")[1];
+			if (!collectionName) {
+				return new Response("Missing collection name", { status: 400 });
+			}
+      return createDynamicQuery(request, env, collectionName);
+    }
 
 		switch (method) {
 			case "GET":
@@ -89,6 +99,79 @@ async function createNewProduct(request: Request, env: Env): Promise<Response> {
 	}
 	catch (error) {
 		console.error(error);
+		return new Response("An error occurred", { status: 500 });
+	}
+}
+
+// Handle dynamic FQL queries
+async function createDynamicQuery(
+	request: Request,
+	env: Env,
+	collectionName: string
+): Promise<Response> {
+	const body = await request.json() as any;
+	const {
+		operation,
+	} = body;
+
+	switch (operation) {
+		case "create":
+			return createDocument(collectionName, body, env);
+		case "update":
+			return updateDocument(collectionName, body, env);
+		case "delete":
+			return deleteDocument(collectionName, body, env);
+		default:
+			return new Response("Invalid operation", { status: 400 });
+	}
+}
+
+async function createDocument(collectionName: string, body: any, env: Env): Promise<Response> {
+  const client = new Client({ secret: env.FAUNA_SECRET });
+  try {
+    // Pass the constructed FQL string inside the `fql` template literal
+    const result = await client.query(fql`
+			Collection(${collectionName}).create(${body.fields})
+		`);
+    return new Response(JSON.stringify(result.data));
+  } catch (error) {
+		console.error(error);
+    if (error instanceof FaunaError) {
+      return new Response(error.message, { status: 500 });
+    }
+    return new Response("An error occurred", { status: 500 });
+  }
+}
+
+
+async function updateDocument(collectionName: string, body: any, env: Env): Promise<Response> {
+	const client = new Client({ secret: env.FAUNA_SECRET });
+	const { id, fields } = body;
+	try {
+		const result = await client.query(fql`
+			Collection(${collectionName}).byId(${id}).update(${fields})
+		`);
+		return new Response(JSON.stringify(result.data));
+	} catch (error) {
+		if (error instanceof FaunaError) {
+			return new Response(error.message, {status: 500});
+		}
+		return new Response("An error occurred", { status: 500 });
+	}
+}
+
+async function deleteDocument(collectionName: string, body: any, env: Env): Promise<Response> {
+	const client = new Client({ secret: env.FAUNA_SECRET });
+	const { id } = body;
+	try {
+		const result = await client.query(fql`
+			Collection(${collectionName}).byId(${id}).delete()
+		`);
+		return new Response(JSON.stringify(result.data));
+	} catch (error) {
+		if (error instanceof FaunaError) {
+			return new Response(error.message, {status: 500});
+		}
 		return new Response("An error occurred", { status: 500 });
 	}
 }

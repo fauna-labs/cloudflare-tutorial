@@ -4,7 +4,7 @@ collection Product {
   // Use an Integer to represent cents.
   // This avoids floating-point precision issues.
   price: Int
-  category: Ref<Category>
+  category: Ref<Category>?
   stock: Int
 
   // Use a unique constraint to ensure no two products have the same name.
