@@ -12,17 +12,20 @@ export default {
   ): Promise<Response> {
     // Extract the method from the request
     const { method, url } = request;
-		const { pathname } = new URL(url);
+	const { pathname } = new URL(url);
 
-		// Route the request based on path and method
-    if (method === "POST" && pathname.startsWith("/dynamic/")) {
-      const collectionName = pathname.split("/dynamic/")[1];
-			if (!collectionName) {
-				return new Response("Missing collection name", { status: 400 });
-			}
-      return createDynamicQuery(request, env, collectionName);
-    }
-
+	// Route the request based on path and method
+	if (method === "POST" && pathname.startsWith("/dynamic/")) {
+	const collectionName = pathname.split("/dynamic/")[1];
+	if (!collectionName) {
+		return new Response("Missing collection name", { status: 400 });
+	}
+	// Add validation for collection name
+	if (!/^[a-zA-Z0-9_]+$/.test(collectionName)) {
+		return new Response("Invalid collection name - use only letters, numbers and underscore", { status: 400 });
+	}
+	return createDynamicQuery(request, env, collectionName);
+	}
 		switch (method) {
 			case "GET":
 				return getAllProducts(request, env);
