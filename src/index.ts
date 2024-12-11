@@ -64,6 +64,7 @@ export default {
                         console.log("Page: ", page);
                         // you need to make a decision here if you want to
                         // flatten the events. This example does not.
+                        cursorVal = page.cursor;
                         for (const event of page.events) {
                             console.log("Event: ", event);
                             cursorVal = event.cursor;
@@ -90,7 +91,7 @@ export default {
                         );
 
                     }
-
+                    console.log(cursorVal);
                     // Release lock
                     await client.query(
                         fql`lockUpdate("orderFulfillment", ${cursorVal})`
