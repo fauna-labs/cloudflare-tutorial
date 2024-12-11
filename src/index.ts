@@ -1,4 +1,4 @@
-import { Client, fql, FaunaError, FeedClientConfiguration } from 'fauna';
+import { Client, fql, FaunaError, FeedClientConfiguration, ServiceError } from 'fauna';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface Env {
@@ -44,70 +44,86 @@ export default {
                 return new Response('Another worker is processing the feed', { status: 409 });
 
             } else if (lockData.locked == true && lockData.identity == myIdentifer) {
-                // Got the lock, so process the event feed.
+                // Got the lock, so process the event feed. 
                 
-                // Connect to the feed and push each order to the other system.
-                
-                const cursorValue = await client.query(
-                    fql`Cursor.byId(${lockData.cursor.id}) { cursorValue }`
-                );
-                
-                //console.log("Cursory value is: " + cursorValue.data.value);
-
-
-                // I only want the value of the cursor.
-                let cursorVal: string | null = cursorValue.data?.cursorValue;
-
-                const options = cursorVal ? { cursor: cursorVal } : undefined
-                
-                // get an events feed for the Order collection.
-                const feed = client.feed(fql`Order.all().eventSource()`, options);
-                
-                for await (const page of feed) {
+                    const cursorValue = await client.query(
+                        fql`Cursor.byId(${lockData.cursor.id}) { cursorValue }`
+                    );
                     
-                    console.log("Page: ", page);
-                    // you need to make a decision here if you want to
-                    // flatten the events. This example does not.
-                    for (const event of page.events) {
-                        console.log("Event: ", event);
-                        cursorVal = event.cursor;
-                        console.log("event cursor: " + cursorVal);
-                        switch (event.type) {
-                            case "add":
-                            // Webhook to add a new order in the fulfillment system
-                            console.log("Add event: ", event);
-                            break;
-                            case "update":
-                            // Webhook to update an order in the fulfillment system
-                            console.log("Update event: ", event);
-                            break;
-                            case "remove":
-                            // Webhook to attempt to cancel an order in the fulfillment system
-                            console.log("Remove event: ", event);
-                            break;
+                    //console.log("Cursory value is: " + cursorValue.data.value);
+
+                    // I only want the value of the cursor.
+                    let cursorVal: string | null = cursorValue.data?.cursorValue;
+
+                    const options = cursorVal ? { cursor: cursorVal } : undefined
+                try {
+                    // get an events feed for the Order collection.
+                    const feed = client.feed(fql`Order.all().eventSource()`, options);
+                    
+                    for await (const page of feed) {
+                        console.log("Page: ", page);
+                        // you need to make a decision here if you want to
+                        // flatten the events. This example does not.
+                        for (const event of page.events) {
+                            console.log("Event: ", event);
+                            cursorVal = event.cursor;
+                            console.log("event cursor: " + cursorVal);
+                            switch (event.type) {
+                                case "add":
+                                // Webhook to add a new order in the fulfillment system
+                                console.log("Add event: ", event);
+                                break;
+                                case "update":
+                                // Webhook to update an order in the fulfillment system
+                                console.log("Update event: ", event);
+                                break;
+                                case "remove":
+                                // Webhook to attempt to cancel an order in the fulfillment system
+                                console.log("Remove event: ", event);
+                                break;
+                            }
                         }
+                        // Update the cursor in Fauna.
+                        //console.log("Cursor: " + page.cursor);
+                        const updateCursor = await client.query(
+                            fql`Cursor.byId(${lockData.cursor.id})!.update({ cursorValue: ${page.cursor} })`
+                        );
+
                     }
-                    // Update the cursor in Fauna.
-                    //console.log("Cursor: " + page.cursor);
-                    const updateCursor = await client.query(
-                        fql`Cursor.byId(${lockData.cursor.id})!.update({ cursorValue: ${page.cursor} })`
+
+                    // Release lock
+                    await client.query(
+                        fql`lockUpdate("orderFulfillment", ${cursorVal})`
                     );
 
+                    return new Response('I got the lock and then did some stuff!', { status: 200 });
+                } catch (cursorError) {
+                    if (cursorError instanceof FaunaError && cursorError.message.includes("is too far in the past")) {
+                        console.warn("Cursor is too old, deleting and retrying...");
+
+                        // Delete the outdated cursor document
+                        await client.query(
+                            fql`Cursor.byId(${lockData.cursor.id})!.update({cursorValue: null})`
+                        );
+
+                        // unlock the lock document.
+                        await client.query(
+                            fql`lockUpdate("orderFulfillment", ${cursorVal})`
+                        );
+                    } else {
+                        throw cursorError;
+                    }
                 }
-
-                // Release lock
-                const releaseLock = await client.query(
-                    fql`lockUpdate("orderFulfillment", "343g343")`
-                );
-
-                return new Response('I got the lock and then did some stuff!', { status: 200 });
             } else {
                 return new Response('There is nothing to do, something went wrong.', { status: 500 });
             }
         } catch (error) {
             if (error instanceof FaunaError) {
-
-                return new Response("Error " + error, { status: 500 });
+                if (error instanceof ServiceError) {
+                    console.error(error.queryInfo?.summary);
+                } else {
+                    return new Response("Error " + error, { status: 500 });
+                }
             }
             return new Response('An error occurred, ' + error.message, { status: 500 });
         }
