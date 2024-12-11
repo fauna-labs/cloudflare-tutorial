@@ -72,7 +72,7 @@ export default {
                             switch (event.type) {
                                 case "add":
                                 // Webhook to add a new order in the fulfillment system
-                                console.log("Add event: ", event);
+                                //console.log("Add event: ", event);
                                 break;
                                 case "update":
                                 // Webhook to update an order in the fulfillment system
