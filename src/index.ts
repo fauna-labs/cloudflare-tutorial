@@ -1,191 +1,115 @@
-import { Client, fql, FaunaError } from "fauna";
+import { Client, fql, FaunaError, FeedClientConfiguration } from 'fauna';
+import { v4 as uuidv4 } from 'uuid';
 
 export interface Env {
   FAUNA_SECRET: string;
 }
 
-interface RequestBody {
-  operation: "create" | "update" | "delete";
-  id?: string; // Only required for "update" and "delete" operations
-  fields?: Record<string, any>; // Data fields for "create" and "update" operations
-}
-
 export default {
-  async fetch(
-    request: Request,
-    env: Env,
-    ctx: ExecutionContext
-  ): Promise<Response> {
-    // Extract the method from the request
-    const { method, url } = request;
-		const { pathname } = new URL(url);
+    async fetch(
+        request: Request,
+        env: Env,
+        ctx: ExecutionContext
+    ): Promise<Response> {
 
-		// Route the request based on path and method
-    if (method === "POST" && pathname.startsWith("/dynamic/")) {
-      const collectionName = pathname.split("/dynamic/")[1];
-			if (!collectionName) {
-				return new Response("Missing collection name", { status: 400 });
-			}
-      return createDynamicQuery(request, env, collectionName);
-    }
+        // Extract the method from the request
+        const { method } = request;
+  
+        // Make a query to Fauna
+        const client = new Client({ secret: env.FAUNA_SECRET });
 
-		switch (method) {
-			case "GET":
-				return getAllProducts(env);
-			case "POST":
-				const body = await request.json() as RequestBody;
-				return createNewProduct(body, env);
-			default:
-				return new Response("Method Not Allowed", { status: 405 });
-		}
-	},
+        try {
+            // There are two cursors used in the code. The first is for where in the Fauna feed to pick up from.
+            // the second is for the document stored in Fauna that is used for locking the feed so it's only processed
+            // one at a time by a single worker.
+
+            const myIdentifer = uuidv4().toString(); //generate a unique identifier for this function run.
+  
+            // Call the lockAcquire user-defined function (UDF) in Fauna to get the cursor information,
+            // lock information, and if you can lock it, append the identity.
+
+            const lockDataResponse = await client.query(
+                fql`lockAcquire("orderFulfillment", ${myIdentifer})`
+            );
+
+            // The response from the UDF is a JSON object with a data field containing the cursor information and stats.
+            // We need the data part only for this example.
+            const lockData = lockDataResponse.data;
+
+            //console.log(cursorData);
+
+            if ((lockData.locked) && ('identity' in lockData) && !(lockData.identity == myIdentifer)) {
+                // If locked is true and there is no gotIt field, return a 409 Conflict response
+      
+                return new Response('Another worker is processing the feed', { status: 409 });
+
+            } else if (lockData.locked == true && lockData.identity == myIdentifer) {
+                // Got the lock, so process the event feed.
+                
+                // Connect to the feed and push each order to the other system.
+                
+                const cursorValue = await client.query(
+                    fql`Cursor.byId(${lockData.cursor.id}) { cursorValue }`
+                );
+                
+                //console.log("Cursory value is: " + cursorValue.data.value);
+
+
+                // I only want the value of the cursor.
+                let cursorVal: string | null = cursorValue.data?.cursorValue;
+
+                const options = cursorVal ? { cursor: cursorVal } : undefined
+                
+                // get an events feed for the Order collection.
+                const feed = client.feed(fql`Order.all().eventSource()`, options);
+                
+                for await (const page of feed) {
+                    
+                    console.log("Page: ", page);
+                    // you need to make a decision here if you want to
+                    // flatten the events. This example does not.
+                    for (const event of page.events) {
+                        console.log("Event: ", event);
+                        cursorVal = event.cursor;
+                        console.log("event cursor: " + cursorVal);
+                        switch (event.type) {
+                            case "add":
+                            // Webhook to add a new order in the fulfillment system
+                            console.log("Add event: ", event);
+                            break;
+                            case "update":
+                            // Webhook to update an order in the fulfillment system
+                            console.log("Update event: ", event);
+                            break;
+                            case "remove":
+                            // Webhook to attempt to cancel an order in the fulfillment system
+                            console.log("Remove event: ", event);
+                            break;
+                        }
+                    }
+                    // Update the cursor in Fauna.
+                    //console.log("Cursor: " + page.cursor);
+                    const updateCursor = await client.query(
+                        fql`Cursor.byId(${lockData.cursor.id})!.update({ cursorValue: ${page.cursor} })`
+                    );
+
+                }
+
+                // Release lock
+                const releaseLock = await client.query(
+                    fql`lockUpdate("orderFulfillment", "343g343")`
+                );
+
+                return new Response('I got the lock and then did some stuff!', { status: 200 });
+            } else {
+                return new Response('There is nothing to do, something went wrong.', { status: 500 });
+            }
+        } catch (error) {
+            if (error instanceof FaunaError) {
+
+                return new Response("Error " + error, { status: 500 });
+            }
+            return new Response('An error occurred, ' + error.message, { status: 500 });
+        }
+    },
 };
-
-async function getAllProducts(env: Env): Promise<Response> {
-  // Custom GET logic here (e.g., fetching data from Fauna)
-	const client = new Client({ secret: env.FAUNA_SECRET });
-	try {
-		const result = await client.query(fql`
-			Product.all()
-		`);
-		return new Response(JSON.stringify(result.data));
-	} catch (error) {
-		if (error instanceof FaunaError) {
-			return new Response(error.message, {status: 500});
-		}
-		return new Response("An error occurred", { status: 500 });
-	}
-}
-
-async function createNewProduct(body: any, env: Env): Promise<Response> {
-	const {
-		name,
-		price,
-		description,
-		category,
-		stock,
-	} = body;
-
-	if (!name || !price || !description || !category || !stock) {
-		return new Response("Missing required fields", { status: 400 });
-	}
-
-	const client = new Client({ secret: env.FAUNA_SECRET });
-	try {
-		// Custom POST logic here (e.g., storing data to Fauna)
-		const result = await client.query(fql`
-			// Get the category by name. We can use .first() here because we know that the category
-			// name is unique.
-			let category = Category.byName(${category}).first()
-			// If the category does not exist, abort the query.
-			if (category == null) abort("Category does not exist.")
-				// Create the product with the given values.
-				let args = { name: ${name}, price: ${price}, stock: ${stock}, description: ${description}, category: category }
-				let product: Any = Product.create(args)
-				// Use projection to only return the fields you need.
-				product {
-					id,
-					name,
-					price,
-					description,
-					stock,
-					category {
-						id,
-						name,
-						description
-					}
-				}
-		`);
-		return new Response(JSON.stringify(result.data));
-	}
-	catch (error) {
-		console.error(error);
-		return new Response("An error occurred", { status: 500 });
-	}
-}
-
-async function createDynamicQuery(
-  request: Request,
-  env: Env,
-  collectionName: string
-): Promise<Response> {
-  const body = await request.json() as any;
-  const { operation } = body;
-
-  switch (operation) {
-    case "create":
-      return createDocument(collectionName, body, env);
-    case "update":
-      return updateDocument(collectionName, body, env);
-    case "delete":
-      return deleteDocument(collectionName, body, env);
-    default:
-      return new Response("Invalid operation", { status: 400 });
-  }
-}
-
-async function createDocument(
-  collectionName: string,
-  body: any,
-  env: Env
-): Promise<Response> {
-  if (collectionName === "Product") {
-    // Delegate to createNewProduct for specific "Product" creation logic
-    return createNewProduct(body.fields, env);
-  }
-
-  const client = new Client({ secret: env.FAUNA_SECRET });
-  try {
-    // Pass the constructed FQL string inside the `fql` template literal
-    const result = await client.query(fql`
-			Collection(${collectionName}).create(${body.fields})
-		`);
-    return new Response(JSON.stringify(result.data));
-  } catch (error) {
-    console.error(error);
-    if (error instanceof FaunaError) {
-      return new Response(error.message, { status: 500 });
-    }
-    return new Response("An error occurred when creating the document.", { status: 500 });
-  }
-}
-
-async function updateDocument(
-  collectionName: string,
-  body: any,
-  env: Env
-): Promise<Response> {
-  const client = new Client({ secret: env.FAUNA_SECRET });
-  const { id, fields } = body;
-  try {
-    const result = await client.query(fql`
-			Collection(${collectionName}).byId(${id}).update(${fields})
-		`);
-    return new Response(JSON.stringify(result.data));
-  } catch (error) {
-    if (error instanceof FaunaError) {
-      return new Response(error.message, { status: 500 });
-    }
-    return new Response("An error occurred", { status: 500 });
-  }
-}
-
-async function deleteDocument(
-  collectionName: string,
-  body: any,
-  env: Env
-): Promise<Response> {
-  const client = new Client({ secret: env.FAUNA_SECRET });
-  const { id } = body;
-  try {
-    const result = await client.query(fql`
-			Collection(${collectionName}).byId(${id}).delete()
-		`);
-    return new Response(JSON.stringify(result.data));
-  } catch (error) {
-    if (error instanceof FaunaError) {
-      return new Response(error.message, { status: 500 });
-    }
-    return new Response("An error occurred", { status: 500 });
-  }
-}

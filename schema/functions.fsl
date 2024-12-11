@@ -1,0 +1,54 @@
+@role(locksAndCursors)
+function lockAcquire(name, identifier) {
+  let lock = Lock.byName(name + "Lock")!.first()
+
+  // If locked is true, then we need if we are the ones who own the lock
+  if ((lock != null) && (lock!.locked == true)) {
+    // if the lock document exists and is locked by someone else, return the value of locked
+    // and the identity of who has it locked currently.
+    lock {locked, identity, test: "dfd"}
+  } else if ((lock != null) && (lock!.locked == false)) {
+    // If the lock document exists and is not locked, lock it, set a TTL on the document, and the cursor.
+    lock!.update({locked: true, identity: identifier, ttl: Time.now().add(6000, "seconds"), cursor: Cursor.byName(name + "Cursor")!.first()})
+  } else if (lock == null) {
+    //if the document doesn't exist, create it, and lock set it to locked by the calling function.
+    Lock.create({
+      name: name + "Lock",
+      locked: true,
+      identity: identifier,
+      lastProcessedTimestamp: Time.now(),
+      cursor: Cursor.byName(name + "Cursor")!.first(),
+      ttl: Time.now().add(600, "seconds")
+    })
+  } 
+}
+
+
+@role(locksAndCursors)
+function lockUpdate(name, cursorValue) {
+    let lock = Lock.byName(name + "Lock")!.first()
+
+    // If the document is locked, set locked field to false, update the lastProcessedTimestamp, and remove TTL field
+    if (lock != null && lock!.locked == true) {
+      // if
+      lock!.update({locked: false, lastProcessedTimestamp: Time.now(), ttl: null, identity: null})
+
+      Cursor.byId(lock!.cursor.id)!.update({value: cursorValue})
+    } else {
+      //if nothing else, abort.
+      abort("Invalid document id or lock not set.")
+    }
+}
+
+role locksAndCursors {
+  privileges Cursor {
+    create
+    read
+    write
+  }
+  privileges Lock {
+    create
+    read
+    write
+  }
+}

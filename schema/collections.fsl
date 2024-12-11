@@ -1,0 +1,25 @@
+collection Cursor {
+  name: String
+  cursorValue: String?
+  *: Any
+  
+  unique [.name]
+
+  index byName {
+    terms [.name]
+  }
+}
+
+collection Lock {
+  name: String
+  cursorValue: String?
+  cursorInfo: Ref<Lock>?
+  locked: Boolean = false
+  *: Any
+  
+  unique [.name]
+  document_ttls true
+  index byName {
+    terms [.name]
+  }
+}
