@@ -12,7 +12,6 @@ collection Cursor {
 
 collection Lock {
   name: String
-  cursorValue: String?
   cursorInfo: Ref<Lock>?
   locked: Boolean = false
   *: Any

@@ -1,3 +1,17 @@
+
+role locksAndCursors {
+  privileges Cursor {
+    create
+    read
+    write
+  }
+  privileges Lock {
+    create
+    read
+    write
+  }
+}
+
 @role(locksAndCursors)
 function lockAcquire(name, identifier) {
   let lock = Lock.byName(name + "Lock")!.first()
@@ -23,7 +37,6 @@ function lockAcquire(name, identifier) {
   } 
 }
 
-
 @role(locksAndCursors)
 function lockUpdate(name, cursorValue) {
     let lock = Lock.byName(name + "Lock")!.first()
@@ -38,17 +51,4 @@ function lockUpdate(name, cursorValue) {
       //if nothing else, abort.
       abort("Invalid document id or lock not set.")
     }
-}
-
-role locksAndCursors {
-  privileges Cursor {
-    create
-    read
-    write
-  }
-  privileges Lock {
-    create
-    read
-    write
-  }
 }
